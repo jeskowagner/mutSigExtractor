@@ -17,16 +17,19 @@ extractSigsForHrdClassifier(vcf.snv, vcf.indel, vcf.sv,
 \item{sample.name}{The name of the sample as a character. Defaults to 'sample' if none is provided.}
 }
 \value{
-A 1-column data frame containing the mutational signature contributions
+A 1-row data frame containing the mutational signature contributions
 }
 \description{
 Extract signatures in the format compatible with the random forest HRD classifier
 }
 \examples{
-extractSigsForHrdClassifier(
+library(randomForest)
+sigs <- extractSigsForHrdClassifier(
    vcf.snv = '/Users/lnguyen/hpc/cog_bioinf/cuppen/project_data/HMF_data/DR010/analysis/Arne/DR-10_update/scripts/SNV2//CPCT02010350R_CPCT02010350T_PASS_SNV.vcf.gz',
    vcf.indel = '/Users/lnguyen/hpc/cog_bioinf/cuppen/project_data/HMF_data/DR010/analysis/Arne/DR-10_update/scripts/INDEL2//CPCT02010350R_CPCT02010350T_PASS_indel.vcf.gz',
    vcf.sv = '/Users/lnguyen/hpc/cog_bioinf/cuppen/project_data/HMF_data/DR010-update/data//170217_HMFregCPCT_FR12244678_FR12244592_CPCT02010350/CPCT02010350R_CPCT02010350T_somaticSV_bpi.vcf.gz',
    sample.name = 'CPCT02010350R_CPCT02010350T'
 )
+rf_model <- readRDS('/Users/lnguyen/hpc/cog_bioinf/cuppen/project_data/Luan_PCAGW/scripts/mltoolkit/example/data/rf_hrd_predict.rds')
+predict(rf_model, sigs, type = 'prob')
 }
