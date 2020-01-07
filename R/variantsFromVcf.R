@@ -1,5 +1,7 @@
 #' Extract relevant variant info for extracting SNV, indel, and SV signatures.
 #'
+#' [Jesko:] Now returns with more information: reference and alternative chromosome and position.
+#'
 #' @param vcf.file Path to the vcf file
 #' @param mode A character stating which type of signature is to be extracted: 'snv','indel', or 'sv'
 #' @param sv.caller Only applies when mode=='sv'. At this moment supports 'manta' or 'gridss'.
@@ -141,7 +143,7 @@ variantsFromVcf <- function(
       ## Decision tree
       if(verbose){ message('Determining and returning SV length and type...') }
       out <- with(df,{
-         do.call(rbind,Map(function(partner_type, chrom_ref, chrom_alt, alt, sv_len_pre){
+         do.call(rbind,Map(function(partner_type, chrom_ref, chrom_alt, alt, sv_len_pre, pos_ref, pos_alt){
             if(partner_type == 'b'){
                sv_type <- 'SGL'
             } else if(chrom_ref != chrom_alt){
@@ -161,8 +163,8 @@ variantsFromVcf <- function(
             if(sv_type %in% c('SGL','TRA')){ sv_len <- NA }
             else{ sv_len <- sv_len_pre }
 
-            return(data.frame(sv_type, sv_len, stringsAsFactors = F))
-         }, partner_type, chrom_ref, chrom_alt, alt, sv_len_pre,  pos_alt, alt_coord, USE.NAMES = F))
+            return(data.frame(sv_type, sv_len, stringsAsFactors = F, chrom_ref, pos_ref, chrom_alt, pos_alt))
+         }, partner_type, chrom_ref, chrom_alt, alt, sv_len_pre, pos_ref, pos_alt, USE.NAMES = F))
       })
 
       return(out)
