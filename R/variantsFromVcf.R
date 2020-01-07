@@ -1,170 +1,140 @@
-#' Extract relevant variant info for extracting SNV, indel, and SV signatures.
+#' Extract structural variant signatures
+#'
+#' @description Will return a 1-column matrix containing: (if output = 'signatures') the absolute
+#' signature contributions (i.e. the number of mutations contributing to each mutational signature),
+#' or (if output = 'contexts') the mutation contexts.
+#'
+#' To elaborate, the 6 SV signatures used are those described in this paper: https://media.nature.com/original/nature-assets/nature/journal/v534/n7605/extref/nature17676-s3.zip,
+#' in Supplementary.Table.21.Signatures.v3.xlsx. These are derived from mutation contexts composed
+#' of SV type/length.
+#'
+#' Note that the probabilities of the clustered and non-clustered rearrangements in the signature
+#' profile have been combined. In other words, whether the rearrangements were
+#' clustered/non-clustered were not considered.
 #'
 #' @param vcf.file Path to the vcf file
-#' @param mode A character stating which type of signature is to be extracted: 'snv','indel', or 'sv'
-#' @param sv.caller Only applies when mode=='sv'. At this moment supports 'manta' or 'gridss'.
-#' Currently there is no standard to how SVs are reported in vcfs. Therefore, output from different
-#' callers will need to be parsed separately.
-#' @param ref.genome A character naming the BSgenome reference genome. Default is
-#' "BSgenome.Hsapiens.UCSC.hg19". If another reference genome is indicated, it will also need to be
-#' installed.
-#' @param chrom.group chrom.group can be 'auto' for autosomes, 'sex' for sex chromosomes/allosomes,
-#' 'circular' for circular chromosomes. The default is 'all' which returns all the chromosomes.
-#' @param vcf.filter A character or character vector to specifying which variants to keep,
-#' corresponding to the values in the vcf FILTER column
+#' @param df A dataframe with the columns: sv_type, sv_len. sv_type can be DEL, DUP, INV, TRA, BND.
+#' Note that for TRA and BND, sv_len will be ignored. Alternative input option to vcf.file
+#' @param output Output the absolute signature contributions (default, 'signatures'), or the SV
+#' type/length contexts ('contexts')
+#' @param sample.name If a character is provided, the header for the output matrix will be named to
+#' this. If none is provided, the basename of the vcf file will be used.
+#' @param half.tra.counts Divide translocation counts by 2?
+#' @param sv.caller Can be 'manta' or 'gridss'
+#' @param sv.len.cutoffs SV length cutoff intervals as a numeric vector.
+#' @param signature.profiles A matrix containing the mutational signature profiles, where rows are
+#' the mutation contexts and the columns are  the mutational signatures.
 #' @param verbose Print progress messages?
 #'
-#' @return A data frame containing the relevant variant info for extracting the indicated signature type
+#' @return A 1-column matrix
 #' @export
-variantsFromVcf <- function(
-   vcf.file, mode=NULL, sv.caller='gridss', ref.genome=DEFAULT_GENOME, chrom.group='all',
-   vcf.filter=NA, verbose=F
+
+extractSigsSv <- function(
+   vcf.file=NULL, df=NULL, output='signatures', sample.name=NULL,
+   sv.caller='gridss', half.tra.counts=F,
+   sv.len.cutoffs=if(output=='signatures'){ c(10^c(3:7), Inf) } else { c(0, 10^c(3:7), Inf) },
+   signature.profiles=SV_SIGNATURE_PROFILES,
+   verbose=F, ...
 ){
-
-   if(!(mode %in% c('snv_indel','sv'))){ stop("Mode must be 'snv_indel', or 'sv'") }
-
-   if(verbose){ message('Reading in vcf file...') }
-
-   vcf_fields <- c('CHROM','POS','REF','ALT','FILTER')
-   if(mode=='sv'){
-      if(sv.caller=='gridss'){
-         vcf_fields <- c(vcf_fields, 'ID')
-      } else if(sv.caller=='manta'){
-         vcf_fields <- c(vcf_fields, 'INFO')
-      }
+   if(!is.null(vcf.file)){
+      df <- variantsFromVcf(vcf.file, mode='sv', sv.caller=sv.caller, verbose=verbose, ...)
+   } else if(!is.null(df)){
+      colnames(df) <- c('sv_type','sv_len')
+      half.tra.counts <- F ## If providing dataframe as input default to 'manta'.
+   } else {
+      stop('Please specify either vcf.file or df as input')
    }
 
-   vcf <- readVcfFields(vcf.file, vcf_fields)
-   colnames(vcf) <- tolower(colnames(vcf))
+   if(verbose){ message('Creating SV type/length lookup table...') }
+   sv_types <- c('DEL','DUP','INV') ## INS ignored. TRA/BND dealt with in a later step
 
-   if(nrow(vcf)==0){
-      if(verbose){ warning('VCF contains no rows. Returning NA') }
-      return(NA)
-   }
+   sv_contexts <- data.frame(
+      sv_type = rep( sv_types, each = length(sv.len.cutoffs)-1 ),
+      lower_cutoff = rep( sv.len.cutoffs[-length(sv.len.cutoffs)], length(sv_types) ),
+      upper_cutoff = rep( sv.len.cutoffs[-1], length(sv_types) ),
 
-   ## Set chromosome names to the same used in the supplied ref genome
-   vcf$chrom <- as.character(vcf$chrom)
-   if(!is.null(ref.genome)){
-      ref_genome <- eval(parse(text=ref.genome))
-      ref_organism <- GenomeInfoDb::organism(ref_genome)
-      seqlevelsStyle(vcf$chrom) <- seqlevelsStyle(ref_genome)
-   }
+      stringsAsFactors = F
+   )
 
-   ## Keep certain chromosome types
-   if(chrom.group != 'all'){
-      if(is.null(ref_genome)){ stop('chromosome.group was specified but no reference genome was provided') }
-
-      genome_chrom_group_names <- extractSeqlevelsByGroup(
-         species=ref_organism,
-         style=seqlevelsStyle(ref_genome),
-         group=chrom.group
+   sv_contexts$name <- with(sv_contexts,{
+      v <- paste(
+         sv_type,
+         formatC(lower_cutoff, format = 'e', digits = 0),
+         formatC(upper_cutoff, format = 'e', digits = 0),
+         'bp',sep='_'
       )
-      target_chrom_group_names <- intersect(genome_chrom_group_names, vcf$chrom)
-      vcf$chrom <- vcf$chrom[vcf$chrom %in% target_chrom_group_names]
+      gsub('[+]','',v)
+   })
+
+   ## Deal with empty vcfs
+   if(!is.data.frame(df) && is.na(df)){
+      context_counts <- rep(0, nrow(sv_contexts)+1)
    }
 
-   ## Filter vcf
-   if(!is.na(vcf.filter)){
-      if(verbose){ message('Only keeping variants where FILTER is ', paste(vcf.filter,collapse=', ')) }
-      vcf <- vcf[vcf$filter %in% vcf.filter,]
+   else {
+      if(verbose){ message('Counting DEL, DUP, and INV context occurrences...') }
+      context_counts <- unlist(lapply(1:nrow(sv_contexts), function(i){
+         row <- sv_contexts[i,]
+         variants_ss <- df[
+            df$sv_type == row$sv_type
+            & df$sv_len >= row$lower_cutoff
+            & df$sv_len < row$upper_cutoff
+            ,]
+
+         nrow(variants_ss)
+      }))
+
+      context_counts <- unlist(lapply(1:nrow(sv_contexts), function(i){
+        row <- sv_contexts[i,]
+        variants_ss <- df[
+          df$sv_type == row$sv_type
+          & df$sv_len >= row$lower_cutoff
+          & df$sv_len < row$upper_cutoff
+          ,]
+        
+        nrow(variants_ss)
+      }))
+      
+      ## Count context occurrences for translocations
+      if(verbose){ message('Counting TRA occurrences...') }
+      translocation_counts <- nrow(df[df$sv_type == 'BND' | df$sv_type == 'TRA',])
+
+      if(sv.caller=='manta' & half.tra.counts){ ## manta reports translocations twice (origin/destination)
+         if(verbose){ message('Halving TRA counts...') }
+         translocation_counts <- translocation_counts/2
+      }
+
+      context_counts <- c(context_counts,translocation_counts)
    }
 
-   if(nrow(vcf)==0){
-      if(verbose){ warning('After filtering, VCF contains no rows. Returning NA') }
-      return(NA)
+   ## Assign context names
+   names(context_counts) <- c(sv_contexts$name,'TRA')
+
+   if(output == 'contexts'){
+      if(verbose){ message('Returning SV contexts...') }
+      out <- as.matrix(context_counts)
+
+   } else if(output == 'signatures'){
+      if(verbose){ message('Returning SV signatures...') }
+
+      if(nrow(signature.profiles) != length(context_counts)){
+         stop('The number of contexts in the signature profile matrix != the number of contexts in the context count vector.\n
+              Check that the provided cutoffs sv.len.cutoffs also exists in signature.profiles')
+      }
+
+      ## Least squares fitting
+      out <- fitToSignatures(signature.profiles, context_counts)$x
+      names(out) <- colnames(signature.profiles)
+      out <- as.matrix(out)
    }
 
-   #========= SNV/Indels =========#
-   if(mode=='snv_indel'){
+   colnames(out) <-
+      if(is.null(sample.name)){
+         if(!is.null(vcf.file)){ basename(vcf.file) }
+         else { 'unknown_sample' }
+      } else {
+         sample.name
+      }
 
-      ## Unselect rows with multiple ALT sequences
-      if(verbose){ message('Removing rows with multiple ALT sequences...') }
-      vcf <- vcf[!grepl(',',vcf$alt),]
-
-      ## Post-processing
-      vcf$filter <- NULL
-
-      return(vcf)
-   }
-
-   #========= SV =========#
-   if(!(sv.caller %in% c('manta','gridss'))){
-      stop("Please specify valid SV caller: 'manta','gridss'")
-   }
-
-   if(sv.caller=='manta'){
-
-      if(verbose){ message('Returning SV length and type...') }
-      vcf_info <- strsplit(vcf$info,';')
-
-      sv_type <- sapply(vcf_info,`[`,2) ## Select the 2nd object from each INFO entry
-      sv_type <- gsub('SVTYPE=','',sv_type) ## Remove the 'SVTYPE=' prefix
-
-      sv_len <- sapply(vcf_info,`[`,1) ## Select the 1st object from each INFO entry
-      sv_len <- gsub('SVLEN=','',sv_len) ## Remove the 'SVLEN=' prefix
-      sv_len <- abs(as.integer(sv_len)) ## Convert the character vector to an integer vector; ## Convert negative sv_len from DEL to positive
-
-      out <- data.frame(sv_type, sv_len, stringsAsFactors=F)
-      return(out)
-   }
-
-   if(sv.caller=='gridss'){
-
-      ## ID nomenclature:
-      ## ends with o: 5' breakend
-      ## ends with h: 3' breakend
-      ## ends with b: unpaired breakend
-      ## 'o' breakends have positive SV length
-
-      if(verbose){ message('Keeping one breakend...') }
-      df <- vcf[grepl('o$', vcf$id) | grepl('b$', vcf$id),]
-
-      if(verbose){ message('Determining partner type...') }
-      df$partner_type <- unlist(regmatches(df$id, gregexpr('[ob]$', df$id)))
-
-      df$chrom_ref <- gsub('chr','',df$chrom)
-      df$pos_ref <- df$pos
-
-      if(verbose){ message('Formatting ALT and calculating preliminary SV length...') }
-      alt_coord <- regmatches(df$alt, gregexpr('\\d|\\w+:\\d+', df$alt))
-      alt_coord <- as.data.frame(do.call(rbind, lapply(alt_coord, function(i){
-         if(length(i) == 0){ c(NA,NA) }
-         else { unlist(strsplit(i, ':')) }
-      })))
-      colnames(alt_coord) <- c('chrom_alt','pos_alt')
-
-      df <- cbind(df, alt_coord)
-      df$pos_alt <- as.numeric(as.character(df$pos_alt))
-
-      df$sv_len_pre <- df$pos_alt - df$pos_ref
-
-      ## Decision tree
-      if(verbose){ message('Determining and returning SV length and type...') }
-      out <- with(df,{
-         do.call(rbind,Map(function(partner_type, chrom_ref, chrom_alt, alt, sv_len_pre){
-            if(partner_type == 'b'){
-               sv_type <- 'SGL'
-            } else if(chrom_ref != chrom_alt){
-               sv_type <- 'TRA'
-            } else if(sv_len_pre == 1){
-               sv_type <- 'INS'
-            } else if(grepl('\\w+\\[.+\\[', alt)){
-               sv_type <- 'DEL'
-            } else if(grepl('\\].+\\]\\w+', alt)){
-               sv_type <- 'DUP'
-            } else if(grepl('\\w+\\].+\\]', alt) | grepl('\\[.+\\[\\w+', alt) ){
-               sv_type <- 'INV'
-            } else {
-               sv_type <- NA
-            }
-
-            if(sv_type %in% c('SGL','TRA')){ sv_len <- NA }
-            else{ sv_len <- sv_len_pre }
-
-            return(data.frame(sv_type, sv_len, stringsAsFactors = F))
-         }, partner_type, chrom_ref, chrom_alt, alt, sv_len_pre, USE.NAMES = F))
-      })
-
-      return(out)
-   }
+   return(out)
 }
