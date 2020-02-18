@@ -10,8 +10,8 @@
 #' @param ref.genome A character naming the BSgenome reference genome. Default is
 #' "BSgenome.Hsapiens.UCSC.hg19". If another reference genome is indicated, it will also need to be
 #' installed.
-#' @param chrom.group chrom.group can be 'auto' for autosomes, 'sex' for sex chromosomes/allosomes,
-#' 'circular' for circular chromosomes. The default is 'all' which returns all the chromosomes.
+#' @param keep.chroms A character vector specifying which chromosomes to keep. To keep autosomal and
+#' sex chromosomes for example use: keep.chroms=paste0('chr',c(1:22,'X','Y'))
 #' @param vcf.filter A character or character vector to specifying which variants to keep,
 #' corresponding to the values in the vcf FILTER column
 #' @param verbose Print progress messages?
@@ -19,9 +19,14 @@
 #' @return A data frame containing the relevant variant info for extracting the indicated signature type
 #' @export
 variantsFromVcf <- function(
-   vcf.file, mode=NULL, sv.caller='gridss', ref.genome=DEFAULT_GENOME, chrom.group='all',
+   vcf.file, mode=NULL, sv.caller='gridss', ref.genome=DEFAULT_GENOME, keep.chroms=NULL,
    vcf.filter=NA, verbose=F
 ){
+   # mode='sv'
+   # sv.caller='manta'
+   # vcf.filter='PASS'
+   # verbose=T
+   # vcf.file='/Users/lnguyen/hpc/cog_bioinf/cuppen/project_data/Luan_projects/CHORD/scripts_main/CHORD/example/vcf/PD3905_snv_indel.vcf.gz'
 
    if(!(mode %in% c('snv_indel','sv'))){ stop("Mode must be 'snv_indel', or 'sv'") }
 
@@ -47,22 +52,18 @@ variantsFromVcf <- function(
    ## Set chromosome names to the same used in the supplied ref genome
    vcf$chrom <- as.character(vcf$chrom)
    if(!is.null(ref.genome)){
+      if(verbose){ 'Converting chrom name style to style in ref.genome...' }
       ref_genome <- eval(parse(text=ref.genome))
       ref_organism <- GenomeInfoDb::organism(ref_genome)
       seqlevelsStyle(vcf$chrom) <- seqlevelsStyle(ref_genome)
    }
 
    ## Keep certain chromosome types
-   if(chrom.group != 'all'){
-      if(is.null(ref_genome)){ stop('chromosome.group was specified but no reference genome was provided') }
-
-      genome_chrom_group_names <- extractSeqlevelsByGroup(
-         species=ref_organism,
-         style=seqlevelsStyle(ref_genome),
-         group=chrom.group
-      )
-      target_chrom_group_names <- intersect(genome_chrom_group_names, vcf$chrom)
-      vcf$chrom <- vcf$chrom[vcf$chrom %in% target_chrom_group_names]
+   if(!is.null(keep.chroms)){
+      if(is.null(ref.genome)){ stop('keep.chroms was specified but no reference genome was provided') }
+      if(verbose){ 'Only keeping chromosomes as indicated in keep.chroms...' }
+      seqlevelsStyle(keep.chroms) <- seqlevelsStyle(ref_genome) ## Force chromosome name style to that in ref genome
+      vcf <- vcf[vcf$chrom %in% keep.chroms,]
    }
 
    ## Filter vcf
@@ -78,14 +79,6 @@ variantsFromVcf <- function(
 
    #========= SNV/Indels =========#
    if(mode=='snv_indel'){
-
-      ## Unselect rows with multiple ALT sequences
-      if(verbose){ message('Removing rows with multiple ALT sequences...') }
-      vcf <- vcf[!grepl(',',vcf$alt),]
-
-      ## Post-processing
-      vcf$filter <- NULL
-
       return(vcf)
    }
 
@@ -97,16 +90,12 @@ variantsFromVcf <- function(
    if(sv.caller=='manta'){
 
       if(verbose){ message('Returning SV length and type...') }
-      vcf_info <- strsplit(vcf$info,';')
 
-      sv_type <- sapply(vcf_info,`[`,2) ## Select the 2nd object from each INFO entry
-      sv_type <- gsub('SVTYPE=','',sv_type) ## Remove the 'SVTYPE=' prefix
+      out <- getInfoValues(vcf$info,c('SVTYPE','SVLEN'))
+      colnames(out) <- c('sv_type','sv_len')
+      out$sv_len <- as.numeric(out$sv_len)
+      out$sv_len[out$sv_type=='TRA'] <- NA
 
-      sv_len <- sapply(vcf_info,`[`,1) ## Select the 1st object from each INFO entry
-      sv_len <- gsub('SVLEN=','',sv_len) ## Remove the 'SVLEN=' prefix
-      sv_len <- abs(as.integer(sv_len)) ## Convert the character vector to an integer vector; ## Convert negative sv_len from DEL to positive
-
-      out <- data.frame(sv_type, sv_len, stringsAsFactors=F)
       return(out)
    }
 
