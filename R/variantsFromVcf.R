@@ -83,8 +83,8 @@ variantsFromVcf <- function(
   }
   
   #========= SV =========#
-  if(!(sv.caller %in% c('manta','gridss'))){
-    stop("Please specify valid SV caller: 'manta','gridss'")
+  if(!(sv.caller %in% c('manta','gridss','pcawg'))){
+    stop("Please specify valid SV caller: 'manta','gridss','pcawg")
   }
   
   if(sv.caller == "pcawg") {
