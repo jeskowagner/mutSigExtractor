@@ -87,7 +87,7 @@ variantsFromVcf <- function(
     stop("Please specify valid SV caller: 'manta','gridss'")
   }
   
-  if(sv.caller = "pcawg") {
+  if(sv.caller == "pcawg") {
     
     if(verbose){ message('Returning breakend data.') }
     
