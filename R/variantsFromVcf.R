@@ -34,7 +34,7 @@ variantsFromVcf <- function(
   
   vcf_fields <- c('CHROM','POS','REF','ALT','FILTER')
   if(mode=='sv'){
-    if(sv.caller=='gridss'){
+    if(sv.caller=='gridss' | sv.caller=='pcawg'){
       vcf_fields <- c(vcf_fields, 'ID', 'INFO')
     } else if(sv.caller=='manta'){
       vcf_fields <- c(vcf_fields, 'INFO')
@@ -87,11 +87,39 @@ variantsFromVcf <- function(
     stop("Please specify valid SV caller: 'manta','gridss'")
   }
   
+  if(sv.caller = "pcawg") {
+    
+    if(verbose){ message('Returning breakend data.') }
+    
+    out <- vcf[,c("chrom", "pos", "alt")]
+    
+    colnames(out) <- c("chrom_ref", "pos_ref", "alt")
+    
+    info <- getInfoValues(vcf$info,c('SVCLASS','MATEPOS','HOMLEN'))
+    out$sv_len <- abs(out$pos - as.numeric(info$MATEPOS))
+    out$sv_type <- info$SVCLASS
+    out$sv_len[out$sv_type=='TRA'] <- NA
+    out$homlen <- as.numeric(info$HOMLEN)
+    
+    alt_coord <- regmatches(out$alt, gregexpr('\\d|\\w+:\\d+', out$alt))
+    alt_coord <- as.data.frame(do.call(rbind, lapply(alt_coord, function(i){
+      if(length(i) == 0){ c(NA,NA) }
+      else { unlist(strsplit(i, ':')) }
+    })))
+    colnames(alt_coord) <- c('chrom_alt','pos_alt')
+    
+    out <- cbind(out, alt_coord)
+    
+    out = out[c("chrom_ref","pos_ref","chrom_alt", "pos_alt", "sv_type", "sv_len", "homlen")]
+    
+    return(out)
+  }
+  
   if(sv.caller=='manta'){
     
     if(verbose){ message('Returning SV length and type...') }
     
-    out <- getInfoValues(vcf$info,c('SVTYPE','SVLEN'))
+    out <- getInfoValues(vcf$info,c('SV','SVLEN'))
     colnames(out) <- c('sv_type','sv_len')
     out$sv_len <- as.numeric(out$sv_len)
     out$sv_len[out$sv_type=='TRA'] <- NA
