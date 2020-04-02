@@ -98,6 +98,7 @@ variantsFromVcf <- function(
     info <- getInfoValues(vcf$info,c('SVCLASS','MATEPOS','HOMLEN'))
     out$sv_len <- abs(out$pos - as.numeric(info$MATEPOS))
     out$sv_type <- info$SVCLASS
+    out[grepl("INV", out$sv_type),"sv_type"] <- "INV"
     out$sv_len[out$sv_type=='TRA'] <- NA
     out$homlen <- as.numeric(info$HOMLEN)
     
